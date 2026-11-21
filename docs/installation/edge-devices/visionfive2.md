@@ -59,8 +59,9 @@ U-Boot and OpenSBI to the SPI flash, for example the ones shipped in Ubuntu 24.0
 
 The banner should now read `U-Boot 2025.10…`, with OpenSBI 1.4 and `EFI v2.11 by Das U-Boot`. USB and NVMe boot become available.
 
-The factory U-Boot can't read USB storage, which is why the update starts from a microSD card. Without one, send the two
-files over the serial console with `loady` (YMODEM) instead of `load mmc`, then run the same `sf update` commands.
+The factory U-Boot can't read USB storage, which is why the update starts from a microSD card. Without one, the two files
+can be sent over the serial console with `loady` (YMODEM) instead of `load mmc`, then written with the same `sf update`
+commands, as done in [kairos#4635](https://github.com/kairos-io/kairos/issues/4635).
 
 ![Flashing U-Boot to the SPI flash on a VisionFive 2](/images/visionfive2/spi-firmware-update.png)
 
@@ -100,8 +101,8 @@ JH7110 display driver, so HDMI stays dark. The web installer listens on port 808
 kairos-agent manual-install --device /dev/nvme0n1 cloud-config.yaml
 ```
 
-Installing to a USB stick also works, but it's slow: about 63 minutes, against 3½ minutes to NVMe. Let it finish and
-sync before you cut the power, or the EFI files can end up empty.
+Installing to a USB stick also works, but it can be slow: about 63 minutes on the stick used in kairos#4635, against
+3½ minutes to NVMe. Let it finish and sync before you cut the power, or the EFI files can end up empty.
 
 Unplug the USB stick afterwards: with the stick present, U-Boot boots USB before NVMe.
 
@@ -123,16 +124,24 @@ k3s:
 
 ### State partition size
 
-Upgrades and state resets need room on `COS_STATE` for the active, passive and transition images. A Kairos v4.4.0 riscv64
-image is about 3.6 GB. A 6.3 GB `COS_STATE` truncated the passive image, `kairos-agent reset` still exited 0, and the
-board fell back to the broken image. Give `COS_STATE` at least three times the image size plus 1 GB when you install:
+`COS_STATE` holds the active and passive images, plus a transition image during an upgrade. Kairos sizes it when it sets
+up the disk, from the image it installs: three times that image plus 1 GB. The 0.1.3 community image (Option A, or a 0.1.3
+live ISO) gets a `COS_STATE` of about 6.4 GB, which is too small once the image grows. On the board used for this page,
+the first upgrade to a 3.2 GB v4.4.0 image fit, but the next one has no room for its transition image. In kairos#4635,
+with a 3.6 GB image, an upgrade and a state reset truncated the passive image, `kairos-agent reset` still exited 0, and
+the board fell back to the broken image. Check the size with `lsblk -o NAME,SIZE,LABEL` before you upgrade.
+
+When you install from an ISO (Option B), set the size in the cloud-config. With an amd64 Kairos v4.4.0 ISO in a VM, this
+gave a 13000 MiB `COS_STATE`, against 2.4 GB from the default rule for that small image:
 
 ```yaml
 install:
   partitions:
     state:
-      size: 13000 # MiB
+      size: 13000 # MiB, room for three 4 GB images
 ```
+
+This setting applies to installs. With the raw image (Option A), check the size after the first boot.
 
 ## Validated
 
@@ -157,7 +166,7 @@ Starting from `ubuntu:24.04`, copy the `kairos-init` binary into the build (inst
 at `/usr/bin/k3s`, and its systemd units by running the upstream install script from `https://get.k3s.io` with
 `INSTALL_K3S_BIN_DIR=/usr/bin INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_SKIP_ENABLE=true`. Add
 `provider-kairos` as the agent provider (`/system/providers/agent-provider-kairos`). Under qemu-user emulation on x86_64,
-the whole build takes about 50 minutes, of which the two `kairos-init` steps take about 7.
+the whole build took about 50 minutes here (in kairos#4635 the two `kairos-init` steps alone took about 7).
 
 ## Known issues
 
