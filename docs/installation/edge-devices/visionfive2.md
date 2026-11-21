@@ -59,6 +59,9 @@ U-Boot and OpenSBI to the SPI flash, for example the ones shipped in Ubuntu 24.0
 
 The banner should now read `U-Boot 2025.10…`, with OpenSBI 1.4 and `EFI v2.11 by Das U-Boot`. USB and NVMe boot become available.
 
+The factory U-Boot can't read USB storage, which is why the update starts from a microSD card. Without one, send the two
+files over the serial console with `loady` (YMODEM) instead of `load mmc`, then run the same `sf update` commands.
+
 ![Flashing U-Boot to the SPI flash on a VisionFive 2](/images/visionfive2/spi-firmware-update.png)
 
 ## Install
@@ -90,12 +93,15 @@ bootefi $kernel_addr_r
 Write the riscv64 ISO to a USB stick with `dd`. With the updated U-Boot, boot it with
 `usb start; load usb 0:2 $kernel_addr_r EFI/BOOT/BOOTRISCV64.EFI; bootefi $kernel_addr_r`. Partition 2 is `EFI_LIVE`.
 
-The live system logs in as root on the serial console. The interactive installer runs on `tty1` (HDMI), and the web installer
-listens on port 8080. On a headless board, install from the serial or SSH shell:
+The live system logs in as root on the serial console. The interactive installer runs on `tty1`, but the stock kernel has no
+JH7110 display driver, so HDMI stays dark. The web installer listens on port 8080. Install from the serial or SSH shell:
 
 ```bash
 kairos-agent manual-install --device /dev/nvme0n1 cloud-config.yaml
 ```
+
+Installing to a USB stick also works, but it's slow: about 63 minutes, against 3½ minutes to NVMe. Let it finish and
+sync before you cut the power, or the EFI files can end up empty.
 
 Unplug the USB stick afterwards: with the stick present, U-Boot boots USB before NVMe.
 
@@ -113,6 +119,19 @@ k3s:
     - --disable=traefik
     # containerd's overlayfs snapshotter can't stack on Kairos' overlay root filesystem
     - --snapshotter=native
+```
+
+### State partition size
+
+Upgrades and state resets need room on `COS_STATE` for the active, passive and transition images. A Kairos v4.4.0 riscv64
+image is about 3.6 GB. A 6.3 GB `COS_STATE` truncated the passive image, `kairos-agent reset` still exited 0, and the
+board fell back to the broken image. Give `COS_STATE` at least three times the image size plus 1 GB when you install:
+
+```yaml
+install:
+  partitions:
+    state:
+      size: 13000 # MiB
 ```
 
 ## Validated
@@ -133,13 +152,17 @@ k3s:
 
 No riscv64 Kairos image is published yet, and the `quay.io/kairos/kairos-init` image has no riscv64 variant. The Kairos
 releases do ship riscv64 binaries (`kairos-init-<version>-linux-riscv64.tar.gz`, `provider-kairos-<version>-linux-riscv64.tar.gz`).
-Starting from `ubuntu:24.04`, copy the `kairos-init` binary into the build (instead of `FROM kairos-init`), run
-`kairos-init -s install` and `-s init`, then add the k3s fork and `provider-kairos` as the agent provider
-(`/system/providers/agent-provider-kairos`). Under qemu-user emulation on x86_64, the build takes about 50 minutes.
+Starting from `ubuntu:24.04`, copy the `kairos-init` binary into the build (instead of `FROM kairos-init`) and run
+`kairos-init -l info -s install -m generic --version v4.4.0`, then the same with `-s init`. Add the k3s binary from the fork
+at `/usr/bin/k3s`, and its systemd units by running the upstream install script from `https://get.k3s.io` with
+`INSTALL_K3S_BIN_DIR=/usr/bin INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_SKIP_ENABLE=true`. Add
+`provider-kairos` as the agent provider (`/system/providers/agent-provider-kairos`). Under qemu-user emulation on x86_64,
+the whole build takes about 50 minutes, of which the two `kairos-init` steps take about 7.
 
 ## Known issues
 
 - The kernel console defaults to 9600 baud (`console=ttyS0` without a speed in the GRUB config).
-- The live installer UI only shows on `tty1`.
+- The live installer UI only shows on `tty1`, and HDMI stays dark with the stock kernel (mainline has no JH7110 display
+  driver yet; out-of-tree display patches make it work).
 - After a hard lockup, the NVMe can stay unavailable (`CSTS=0x0`) across warm reboots. A cold power cycle brings it back.
 - If a node's IP changes, k3s fails with `failed to find interface with specified node ip` until the stale Node object is deleted.
